@@ -10,6 +10,8 @@ import HealthKit
 import UIKit
 import WatchConnectivity
 import LoopKit
+import LoopCore
+
 
 final class WatchDataManager: NSObject {
 
@@ -174,7 +176,7 @@ final class WatchDataManager: NSObject {
 
             // Only set this value in the Watch context if there is a temp basal running that hasn't ended yet
             let date = state.lastTempBasal?.startDate ?? Date()
-            if let scheduledBasal = manager.basalRateSchedule?.between(start: date, end: date).first,
+            if let scheduledBasal = manager.basalRateScheduleApplyingOverrideHistory?.between(start: date, end: date).first,
                 let lastTempBasal = state.lastTempBasal,
                 lastTempBasal.endDate > Date() {
                 context.lastNetTempBasalDose =  lastTempBasal.unitsPerHour - scheduledBasal.value
@@ -191,18 +193,11 @@ final class WatchDataManager: NSObject {
     }
 
     private func addCarbEntryFromWatchMessage(_ message: [String: Any], completionHandler: ((_ units: Double?) -> Void)? = nil) {
-        if let carbEntry = CarbEntryUserInfo(rawValue: message) {
-            let newEntry = NewCarbEntry(
-                quantity: HKQuantity(unit: deviceManager.loopManager.carbStore.preferredUnit, doubleValue: carbEntry.value),
-                startDate: carbEntry.startDate,
-                foodType: nil,
-                absorptionTime: carbEntry.absorptionTimeType.absorptionTimeFromDefaults(deviceManager.loopManager.carbStore.defaultAbsorptionTimes)
-            )
-
-            deviceManager.loopManager.addCarbEntryAndRecommendBolus(newEntry) { (result) in
+        if let carbEntry = CarbEntryUserInfo(rawValue: message)?.carbEntry {
+            deviceManager.loopManager.addCarbEntryAndRecommendBolus(carbEntry) { (result) in
                 switch result {
                 case .success(let recommendation):
-                    AnalyticsManager.shared.didAddCarbsFromWatch(carbEntry.value)
+                    AnalyticsManager.shared.didAddCarbsFromWatch()
                     completionHandler?(recommendation?.amount)
                 case .failure(let error):
                     self.log.error(error)
@@ -235,9 +230,9 @@ extension WatchDataManager: WCSessionDelegate {
             replyHandler([:])
         case LoopSettingsUserInfo.name?:
             if let watchSettings = LoopSettingsUserInfo(rawValue: message)?.settings {
-                // So far we only support watch changes of target range overrides
+                // So far we only support watch changes of temporary schedule overrides
                 var settings = deviceManager.loopManager.settings
-                settings.glucoseTargetRangeSchedule = watchSettings.glucoseTargetRangeSchedule
+                settings.scheduleOverride = watchSettings.scheduleOverride
 
                 // Prevent re-sending these updated settings back to the watch
                 lastSentSettings = settings
